@@ -2,8 +2,10 @@
 One-off fetch for the dashboard.
 
 Pulls two things:
-1. London LSOA 2011 boundaries: 33 borough files from martinjc/UK-GeoJSON,
-   merged and simplified.
+1. London LSOA 2021 boundaries from the ONS Open Geography Portal
+   (ArcGIS REST). Spatial-filtered to a Greater London bbox, then
+   restricted to the LSOAs in the team's Phase 5 output so the codes
+   match the model 1:1.
 2. Police stations in Greater London from OpenStreetMap, via Overpass.
 
 Both end up in dashboard_assets/.
@@ -14,32 +16,23 @@ Run once:  uv run python fetch_dashboard_assets.py
 from __future__ import annotations
 
 import json
-import sys
-import time
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
 import requests
-from shapely.geometry import shape
 
-ASSETS = Path(__file__).parent / "dashboard_assets"
+ROOT = Path(__file__).parent
+ASSETS = ROOT / "dashboard_assets"
 ASSETS.mkdir(exist_ok=True)
 
-LONDON_LADS = [
-    "E09000001", "E09000002", "E09000003", "E09000004", "E09000005",
-    "E09000006", "E09000007", "E09000008", "E09000009", "E09000010",
-    "E09000011", "E09000012", "E09000013", "E09000014", "E09000015",
-    "E09000016", "E09000017", "E09000018", "E09000019", "E09000020",
-    "E09000021", "E09000022", "E09000023", "E09000024", "E09000025",
-    "E09000026", "E09000027", "E09000028", "E09000029", "E09000030",
-    "E09000031", "E09000032", "E09000033",
-]
-
-LSOA_BASE = (
-    "https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/"
-    "json/statistical/eng/lsoa_by_lad/{lad}.json"
+ONS_LSOA21_URL = (
+    "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
+    "Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BSC_V4/"
+    "FeatureServer/0/query"
 )
+LONDON_BBOX = {"xmin": -0.51, "ymin": 51.28, "xmax": 0.34, "ymax": 51.69,
+               "spatialReference": {"wkid": 4326}}
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_QUERY = """
@@ -53,6 +46,18 @@ out center tags;
 """
 
 
+def _team_lsoa_set() -> set[str] | None:
+    """Load the team's Phase 5 LSOA list if available, to restrict the
+    boundary set to exactly what the model covers."""
+    for p in [ROOT / "team_model" / "phase5_clusters.parquet",
+              ROOT.parent / "phase5" / "phase5_clusters.parquet",
+              ROOT / "phase5" / "phase5_clusters.parquet"]:
+        if p.exists():
+            df = pd.read_parquet(p, columns=["lsoa21cd"])
+            return set(df["lsoa21cd"].unique())
+    return None
+
+
 def fetch_lsoa_boundaries() -> Path:
     out_path = ASSETS / "london_lsoa.geojson"
     if out_path.exists():
@@ -60,43 +65,51 @@ def fetch_lsoa_boundaries() -> Path:
         print(f"[lsoa] already exists at {out_path} ({size:.1f} MB), skipping")
         return out_path
 
-    print(f"[lsoa] fetching {len(LONDON_LADS)} London LAD files...")
-    frames = []
-    for i, lad in enumerate(LONDON_LADS, 1):
-        url = LSOA_BASE.format(lad=lad)
-        r = requests.get(url, timeout=30)
+    print("[lsoa] querying ONS for London LSOA 2021 boundaries...")
+    features: list[dict] = []
+    offset = 0
+    page_size = 2000
+    while True:
+        params = {
+            "where": "1=1",
+            "geometry": json.dumps(LONDON_BBOX),
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": "4326",
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "LSOA21CD,LSOA21NM",
+            "outSR": "4326",
+            "f": "geojson",
+            "resultRecordCount": page_size,
+            "resultOffset": offset,
+        }
+        r = requests.get(ONS_LSOA21_URL, params=params, timeout=90)
         r.raise_for_status()
         gj = r.json()
-        gdf = gpd.GeoDataFrame.from_features(gj["features"], crs="EPSG:4326")
-        frames.append(gdf)
-        print(f"  [{i:2d}/33] {lad}: {len(gdf)} LSOAs")
-        time.sleep(0.05)
+        page = gj.get("features", [])
+        features.extend(page)
+        print(f"  fetched {len(features)} so far...")
+        if len(page) < page_size:
+            break
+        offset += page_size
 
-    london = pd.concat(frames, ignore_index=True)
-    london = gpd.GeoDataFrame(london, crs="EPSG:4326")
-    print(f"[lsoa] merged: {len(london)} polygons")
+    print(f"[lsoa] bbox returned {len(features)} polygons")
 
-    london["geometry"] = london.geometry.simplify(
+    gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
+    if "LSOA21CD" not in gdf.columns:
+        raise RuntimeError(f"missing LSOA21CD, got columns: {list(gdf.columns)}")
+
+    team_set = _team_lsoa_set()
+    if team_set:
+        before = len(gdf)
+        gdf = gdf[gdf["LSOA21CD"].isin(team_set)].reset_index(drop=True)
+        print(f"[lsoa] filtered to team's Phase 5 set: "
+              f"{before} -> {len(gdf)} polygons")
+
+    gdf["geometry"] = gdf.geometry.simplify(
         tolerance=0.0005, preserve_topology=True
     )
-
-    code_col = next(
-        (c for c in ["LSOA11CD", "lsoa11cd", "code", "LSOA_CODE"] if c in london.columns),
-        None,
-    )
-    name_col = next(
-        (c for c in ["LSOA11NM", "lsoa11nm", "name", "LSOA_NAME"] if c in london.columns),
-        None,
-    )
-    if code_col is None:
-        print(f"[lsoa] WARNING: no code column found, columns={list(london.columns)}")
-        sys.exit(1)
-    keep = ["geometry", code_col]
-    if name_col:
-        keep.append(name_col)
-    london = london[keep].rename(columns={code_col: "LSOA11CD", name_col or "": "LSOA11NM"})
-
-    london.to_file(out_path, driver="GeoJSON")
+    gdf = gdf[["geometry", "LSOA21CD", "LSOA21NM"]]
+    gdf.to_file(out_path, driver="GeoJSON")
     size = out_path.stat().st_size / 1_000_000
     print(f"[lsoa] saved {out_path} ({size:.1f} MB)")
     return out_path

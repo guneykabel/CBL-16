@@ -120,7 +120,7 @@ def load_station_distances() -> pd.DataFrame:
     feats = load_lsoa_geojson()["features"]
     gdf_lsoa = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326").to_crs("EPSG:27700")
     centroids = gpd.GeoDataFrame(
-        {"lsoa": gdf_lsoa["LSOA11CD"]},
+        {"lsoa": gdf_lsoa["LSOA21CD"]},
         geometry=gdf_lsoa.geometry.centroid,
         crs="EPSG:27700",
     )
@@ -174,7 +174,7 @@ def make_recommendation(row: pd.Series, dist_km: float | None) -> str:
         else:
             bits.append(f"Closest station {dist_km:.1f} km away.")
     else:
-        bits.append("No map polygon for this neighbourhood (split after the 2021 census).")
+        bits.append("No boundary geometry found for this neighbourhood.")
 
     # Dominant feature relative to the London average, as a ratio rather
     # than a z-score so it reads cleanly in a briefing.
@@ -213,8 +213,7 @@ st.markdown(
     "<b>Proof of concept by CBL Group 16.</b> A planning aid, not a "
     "deployment tool. Demand score per neighbourhood, built from 36 months "
     "of crime records, outcomes, stop-and-search, TfL footfall, deprivation, "
-    "and weather. Around 7% of newer neighbourhoods aren't drawn on the map "
-    "but still feed the totals."
+    "and weather. All 4,994 London LSOAs (2021 boundaries) included."
     "</div>",
     unsafe_allow_html=True,
 )
@@ -358,7 +357,7 @@ with col_map:
     geojson = load_lsoa_geojson()
     rendered_features = []
     for feat in geojson["features"]:
-        code = feat["properties"].get("LSOA11CD")
+        code = feat["properties"].get("LSOA21CD")
         if code not in visible_set:
             continue
         feat["properties"]["risk"] = float(risk_lookup.get(code, 0))
@@ -368,7 +367,7 @@ with col_map:
     rendered_geo = {"type": "FeatureCollection", "features": rendered_features}
 
     def style_fn(feat):
-        code = feat["properties"].get("LSOA11CD")
+        code = feat["properties"].get("LSOA21CD")
         is_top = code in top10_set and show_top_hotspots
         tier = feat["properties"].get("tier", 6)
         return {
@@ -383,7 +382,7 @@ with col_map:
         name="LSOAs",
         style_function=style_fn,
         tooltip=folium.GeoJsonTooltip(
-            fields=["LSOA11CD", "LSOA11NM", "risk", "tier_label"],
+            fields=["LSOA21CD", "LSOA21NM", "risk", "tier_label"],
             aliases=["Code", "Neighbourhood", "Score", "Tier"],
             localize=True,
             labels=True,
@@ -411,7 +410,7 @@ with col_map:
     )
 
     if map_event and map_event.get("last_active_drawing"):
-        clicked = map_event["last_active_drawing"].get("properties", {}).get("LSOA11CD")
+        clicked = map_event["last_active_drawing"].get("properties", {}).get("LSOA21CD")
         if clicked and clicked != st.session_state.selected_lsoa:
             st.session_state.selected_lsoa = clicked
 
