@@ -1,0 +1,97 @@
+/* Light theme, generous padding. CBL-16 dashboard. */
+
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 2rem;
+    max-width: 1600px;
+}
+
+h1, h2, h3 {
+    color: #1F2937;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1.05rem; }
+
+/* PoC banner */
+.poc-banner {
+    background: #FFF8E1;
+    border-left: 4px solid #F0B400;
+    padding: 0.55rem 1rem;
+    margin-bottom: 1rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    color: #5A4500;
+}
+
+/* Card-like panels */
+.stCard {
+    background: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+
+[data-testid="stSidebar"] {
+    background: #F5F7FA;
+    border-right: 1px solid #E5E7EB;
+}
+
+[data-testid="stSidebar"] .stSlider {
+    margin-top: 0.4rem;
+}
+
+/* Detail panel */
+.detail-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid #F0F2F5;
+    font-size: 0.92rem;
+}
+.detail-label { color: #6B7280; }
+.detail-value { color: #1F2937; font-weight: 500; }
+
+.muted { color: #6B7280; font-size: 0.85rem; }
+
+/* KPI strip */
+[data-testid="stMetricValue"] {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: #1F2937;
+}
+[data-testid="stMetricLabel"] {
+    color: #6B7280;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+[data-testid="stMetricDelta"] {
+    font-size: 0.78rem;
+}
+
+/* Compact buttons everywhere */
+.stButton > button {
+    border-radius: 6px;
+    font-size: 0.88rem;
+    padding: 0.35rem 0.6rem;
+    line-height: 1.2;
+}
+
+/* Top-10 hotspot list: tighter spacing, plain background */
+[data-testid="stVerticalBlock"]:has(> div > [data-testid="stButton"][key^="hot_"]) {
+    gap: 0;
+}
+[data-testid="stButton"] button[kind="secondary"][data-testid^="baseButton-secondary"] {
+    background: #FFFFFF;
+}
+
+/* Recommendation info box */
+[data-testid="stAlert"] {
+    border-radius: 8px;
+    border-left-width: 4px;
+}
