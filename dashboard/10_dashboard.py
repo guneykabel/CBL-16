@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from branca.colormap import LinearColormap
+from folium.plugins import Fullscreen
 from shapely.geometry import Point
 from streamlit_folium import st_folium
 
@@ -114,6 +115,19 @@ def load_tier_profile() -> pd.DataFrame:
     return pd.read_csv(PROFILE_CSV)
 
 
+@st.cache_data(show_spinner="Dissolving borough boundaries…")
+def load_borough_boundaries() -> dict:
+    """Borough polygons dissolved from the LSOA layer + Phase 5 borough map."""
+    feats = load_lsoa_geojson()["features"]
+    gdf = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
+    lsoa_to_borough = load_phase5().set_index("lsoa")["borough"].to_dict()
+    gdf["borough"] = gdf["LSOA21CD"].map(lsoa_to_borough)
+    gdf = gdf.dropna(subset=["borough"])
+    boroughs = gdf.dissolve(by="borough", as_index=False)
+    boroughs["geometry"] = boroughs.geometry.simplify(0.001, preserve_topology=True)
+    return json.loads(boroughs[["geometry", "borough"]].to_json())
+
+
 @st.cache_data(show_spinner="Computing station distances…")
 def load_station_distances() -> pd.DataFrame:
     """LSOA to nearest police station in km, with station name."""
@@ -196,6 +210,8 @@ def make_recommendation(row: pd.Series, dist_km: float | None) -> str:
 
 if "selected_lsoa" not in st.session_state:
     st.session_state.selected_lsoa = None
+if "last_consumed_click_sig" not in st.session_state:
+    st.session_state.last_consumed_click_sig = None
 
 
 # ----- UI -----
@@ -351,11 +367,22 @@ with col_map:
         caption="Demand score (low to high)",
     )
 
-    m = folium.Map(location=[51.509, -0.118], zoom_start=10,
-                   tiles="cartodbpositron")
+    m = folium.Map(
+        location=[51.509, -0.118],
+        zoom_start=10,
+        tiles="https://cartodb-basemaps-{s}.global.ssl.fastly.net/light_nolabels/{z}/{x}/{y}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    )
+    Fullscreen(
+        position="topright",
+        title="Full screen",
+        title_cancel="Exit full screen",
+        force_separate_button=True,
+    ).add_to(m)
 
     geojson = load_lsoa_geojson()
     rendered_features = []
+    halo_features = []
     for feat in geojson["features"]:
         code = feat["properties"].get("LSOA21CD")
         if code not in visible_set:
@@ -364,17 +391,33 @@ with col_map:
         feat["properties"]["tier"] = int(tier_lookup.get(code, 6))
         feat["properties"]["tier_label"] = label_lookup.get(code, "n/a")
         rendered_features.append(feat)
+        if show_top_hotspots and code in top10_set:
+            halo_features.append(feat)
     rendered_geo = {"type": "FeatureCollection", "features": rendered_features}
+    halo_geo = {"type": "FeatureCollection", "features": halo_features}
+
+    # Soft yellow halo drawn first, so it sits under the choropleth and
+    # only the outer glow shows through.
+    if halo_features:
+        folium.GeoJson(
+            halo_geo,
+            name="Top hotspots halo",
+            style_function=lambda f: {
+                "fillOpacity": 0,
+                "color": "#FBBF24",
+                "weight": 7,
+                "opacity": 0.55,
+            },
+            interactive=False,
+        ).add_to(m)
 
     def style_fn(feat):
-        code = feat["properties"].get("LSOA21CD")
-        is_top = code in top10_set and show_top_hotspots
         tier = feat["properties"].get("tier", 6)
         return {
             "fillColor": TIER_COLOR.get(tier, "#CCCCCC"),
-            "color": "#1F2937" if is_top else "#9CA3AF",
-            "weight": 2.5 if is_top else 0.3,
-            "fillOpacity": 0.88 if is_top else 0.75,
+            "color": "#FFFFFF",
+            "weight": 0,
+            "fillOpacity": 0.92,
         }
 
     folium.GeoJson(
@@ -387,7 +430,7 @@ with col_map:
             localize=True,
             labels=True,
         ),
-        highlight_function=lambda f: {"weight": 3, "color": "#000000"},
+        highlight_function=lambda f: {"weight": 2, "color": "#1F2937"},
     ).add_to(m)
 
     if show_stations:
@@ -396,9 +439,9 @@ with col_map:
             lon, lat = sf["geometry"]["coordinates"]
             name = sf["properties"].get("name", "Police")
             folium.CircleMarker(
-                location=[lat, lon], radius=4,
-                color="#1F2937", weight=1,
-                fillColor="#3F6BAE", fillOpacity=0.85,
+                location=[lat, lon], radius=2.5,
+                color="#1E3A8A", weight=1.2,
+                fillColor="#FFFFFF", fillOpacity=0.85,
                 tooltip=name,
             ).add_to(m)
 
@@ -410,8 +453,16 @@ with col_map:
     )
 
     if map_event and map_event.get("last_active_drawing"):
-        clicked = map_event["last_active_drawing"].get("properties", {}).get("LSOA21CD")
-        if clicked and clicked != st.session_state.selected_lsoa:
+        drawing = map_event["last_active_drawing"]
+        clicked = drawing.get("properties", {}).get("LSOA21CD")
+        # Signature uniquely identifies this click event. Folium replays
+        # the same drawing on every rerun, so we only honour it once.
+        click_sig = json.dumps(drawing, sort_keys=True, default=str)
+        if (
+            clicked
+            and click_sig != st.session_state.last_consumed_click_sig
+        ):
+            st.session_state.last_consumed_click_sig = click_sig
             st.session_state.selected_lsoa = clicked
 
 with col_detail:
