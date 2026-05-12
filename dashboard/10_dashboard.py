@@ -49,28 +49,27 @@ def _find_parquet(name: str) -> Path:
     return candidates[0]
 
 
-PHASE5_PARQUET = _find_parquet("phase5_clusters.parquet")
+PHASE5_PARQUET = _find_parquet("phase5b_clusters.parquet")
 PROFILE_CSV = _find_parquet("phase5_cluster_profiles.csv")
 
-# k=6 tier labels, ordered highest demand to lowest.
-# Names picked to read clearly on a briefing slide.
+# k=4 tier labels, relabelled from the team's Phase 5b output to
+# better match what each cluster actually represents:
+# - Tier 2 is 52% of London (the median), so "Typical" not "Elevated".
+# - Tier 4 is 13 industrial/water/transit LSOAs with no recorded
+#   activity, so "Outlier" not "Low Risk".
 TIER_LABEL = {
-    1: "Hotspot",
-    2: "High demand",
-    3: "Elevated",
-    4: "Steady",
-    5: "Light",
-    6: "Quiet",
+    1: "High Risk",
+    2: "Typical",
+    3: "Below Average",
+    4: "Outlier",
 }
 TIER_COLOR = {
-    1: "#7F1D1D",
-    2: "#DC2626",
-    3: "#F97316",
-    4: "#FBBF24",
-    5: "#A7F3D0",
-    6: "#34D399",
+    1: "#B91C1C",  # deep red — actionable focus
+    2: "#FCD34D",  # warm yellow — the London baseline, not alarming
+    3: "#86EFAC",  # mint — quieter areas
+    4: "#6B7280",  # grey — outlier category, read separately
 }
-ACTION_TIERS = {1, 2}  # tiers that get coverage-gap flagging
+ACTION_TIERS = {1}  # tiers that get coverage-gap flagging
 
 # How the team's six final features map to readable labels.
 FEATURES = {
@@ -102,6 +101,8 @@ def load_phase5() -> pd.DataFrame:
     df = pd.read_parquet(PHASE5_PARQUET)
     df = df.rename(columns={"lsoa21cd": "lsoa", "lsoa21nm": "lsoa_name",
                             "lad22nm": "borough"})
+    # Always override the parquet's tier_label with our local dict so
+    # the dashboard can relabel without re-shipping the team's parquet.
     df["tier_label"] = df["tier"].map(TIER_LABEL)
     return df
 
@@ -192,17 +193,13 @@ def make_recommendation(row: pd.Series, dist_km: float | None) -> str:
     bits: list[str] = []
     delta = row["officers_delta"]
     if row["tier"] == 1:
-        bits.append(f"**Hotspot.** Add about {abs(delta):.0f} officers above an even split.")
+        bits.append(f"**High Risk.** Add about {abs(delta):.0f} officers above an even split.")
     elif row["tier"] == 2:
-        bits.append(f"**High demand.** Add about {abs(delta):.0f} officers above an even split.")
+        bits.append(f"**Typical.** Around the London baseline ({delta:+.1f} officers).")
     elif row["tier"] == 3:
-        bits.append(f"**Elevated.** Slightly above the London baseline ({delta:+.1f} officers).")
-    elif row["tier"] == 4:
-        bits.append("**Steady.** Around the London baseline.")
-    elif row["tier"] == 5:
-        bits.append(f"**Light.** Could free up about {abs(delta):.0f} officers for elsewhere.")
+        bits.append(f"**Below average.** Could free up about {abs(delta):.0f} officers for elsewhere.")
     else:
-        bits.append(f"**Quiet.** Could free up about {abs(delta):.0f} officers for elsewhere.")
+        bits.append("**Outlier.** No recorded activity in this LSOA — typically industrial, water, or transit land. Not a target for patrol allocation.")
 
     has_dist = dist_km is not None and not pd.isna(dist_km)
     if has_dist:
@@ -252,7 +249,8 @@ st.markdown(
     "<b>Proof of concept by CBL Group 16.</b> A planning aid, not a "
     "deployment tool. Risk score per neighbourhood, built from 36 months "
     "of crime records, outcomes, stop-and-search, TfL footfall, deprivation, "
-    "and weather. All 4,994 London LSOAs (2021 boundaries) included."
+    "and weather. All 4,994 London LSOAs (2021 boundaries) grouped into "
+    "4 risk tiers."
     "</div>",
     unsafe_allow_html=True,
 )
@@ -261,7 +259,7 @@ st.title("London policing demand dashboard")
 st.markdown(
     "<p class='muted'>"
     "Where the risk sits across London. 4,994 neighbourhoods scored and "
-    "grouped into 6 tiers, busiest to quietest."
+    "grouped into 4 risk tiers."
     "</p>",
     unsafe_allow_html=True,
 )
@@ -301,11 +299,13 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     qa, qb = st.columns(2)
-    if qa.button("Hotspots only", use_container_width=True):
+    if qa.button("High risk only", use_container_width=True):
         st.session_state.visible_tiers_override = [1]
         st.rerun()
-    if qb.button("Top 2 tiers", use_container_width=True):
-        st.session_state.visible_tiers_override = [1, 2]
+    if qb.button("Hide outliers", use_container_width=True,
+                  help="Hide Tier 4 (Low Risk) — 13 LSOAs with zero "
+                       "recorded activity, mostly industrial/water/transit areas."):
+        st.session_state.visible_tiers_override = [1, 2, 3]
         st.rerun()
     if "visible_tiers_override" in st.session_state:
         visible_tiers = st.session_state.pop("visible_tiers_override")
@@ -354,8 +354,8 @@ officers_reallocated = int(df.loc[df["officers_delta"] > 0, "officers_delta"].su
 
 k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Neighbourhoods in view", f"{n_total:,}")
-k2.metric("Hotspots", f"{n_hotspot:,}",
-          help="The busiest neighbourhoods in London (top tier).")
+k2.metric("High risk LSOAs", f"{n_hotspot:,}",
+          help="Tier 1 — the highest-risk neighbourhoods in London.")
 k3.metric("Average score", f"{mean_risk:.1f}",
           delta=f"top: {top_row['risk_score_scaled']:.1f}" if top_row is not None else None,
           delta_color="off",
@@ -384,10 +384,9 @@ with col_map:
     vmin = float(phase5["risk_score_scaled"].min())
     vmax = float(phase5["risk_score_scaled"].max())
     cmap = LinearColormap(
-        [TIER_COLOR[6], TIER_COLOR[5], TIER_COLOR[4],
-         TIER_COLOR[3], TIER_COLOR[2], TIER_COLOR[1]],
+        [TIER_COLOR[3], TIER_COLOR[2], TIER_COLOR[1]],
         vmin=vmin, vmax=vmax,
-        caption="Risk score (low to high)",
+        caption="Risk score (below average to high). Outliers shown in grey.",
     )
 
     m = folium.Map(
