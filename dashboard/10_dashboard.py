@@ -64,10 +64,12 @@ TIER_LABEL = {
     4: "Outlier",
 }
 TIER_COLOR = {
-    1: "#B91C1C",  # deep red — actionable focus
-    2: "#FCD34D",  # warm yellow — the London baseline, not alarming
-    3: "#86EFAC",  # mint — quieter areas
-    4: "#6B7280",  # grey — outlier category, read separately
+    # Okabe-Ito colourblind-safe palette. Distinguishable for deuteranopia,
+    # protanopia and tritanopia, and in greyscale.
+    1: "#D55E00",  # vermillion — actionable focus
+    2: "#F0E442",  # yellow — the London baseline
+    3: "#56B4E9",  # sky blue — quieter areas (CB-safe alternative to green)
+    4: "#999999",  # medium grey — outlier category, read separately
 }
 ACTION_TIERS = {1}  # tiers that get coverage-gap flagging
 
