@@ -20,13 +20,11 @@ from pathlib import Path
 
 import altair as alt
 import folium
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import streamlit as st
 from branca.colormap import LinearColormap
 from folium.plugins import Fullscreen
-from shapely.geometry import Point
 from streamlit_folium import st_folium
 
 ROOT = Path(__file__).parent
@@ -115,40 +113,65 @@ def load_tier_profile() -> pd.DataFrame:
     return pd.read_csv(PROFILE_CSV)
 
 
-@st.cache_data(show_spinner="Dissolving borough boundaries…")
-def load_borough_boundaries() -> dict:
-    """Borough polygons dissolved from the LSOA layer + Phase 5 borough map."""
-    feats = load_lsoa_geojson()["features"]
-    gdf = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
-    lsoa_to_borough = load_phase5().set_index("lsoa")["borough"].to_dict()
-    gdf["borough"] = gdf["LSOA21CD"].map(lsoa_to_borough)
-    gdf = gdf.dropna(subset=["borough"])
-    boroughs = gdf.dissolve(by="borough", as_index=False)
-    boroughs["geometry"] = boroughs.geometry.simplify(0.001, preserve_topology=True)
-    return json.loads(boroughs[["geometry", "borough"]].to_json())
+def _polygon_centroid(geom: dict) -> tuple[float | None, float | None]:
+    """Mean of the outer ring vertices. Good enough at LSOA scale."""
+    g_type = geom.get("type")
+    if g_type == "Polygon":
+        ring = geom["coordinates"][0]
+    elif g_type == "MultiPolygon":
+        # Pick the largest sub-polygon's outer ring.
+        ring = max(geom["coordinates"], key=lambda p: len(p[0]))[0]
+    else:
+        return None, None
+    arr = np.asarray(ring, dtype=float)
+    return float(arr[:, 0].mean()), float(arr[:, 1].mean())
 
 
 @st.cache_data(show_spinner="Computing station distances…")
 def load_station_distances() -> pd.DataFrame:
-    """LSOA to nearest police station in km, with station name."""
+    """LSOA to nearest police station, in km, with station name.
+
+    Pure-numpy haversine, no geopandas: keeps the Streamlit Cloud
+    memory footprint well under the 1 GB free-tier limit.
+    """
     feats = load_lsoa_geojson()["features"]
-    gdf_lsoa = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326").to_crs("EPSG:27700")
-    centroids = gpd.GeoDataFrame(
-        {"lsoa": gdf_lsoa["LSOA21CD"]},
-        geometry=gdf_lsoa.geometry.centroid,
-        crs="EPSG:27700",
-    )
+    codes: list[str] = []
+    cent_ll: list[tuple[float, float]] = []  # lat, lon
+    for f in feats:
+        code = f["properties"].get("LSOA21CD")
+        lon, lat = _polygon_centroid(f["geometry"])
+        if code is None or lon is None:
+            continue
+        codes.append(code)
+        cent_ll.append((lat, lon))
+    cent = np.array(cent_ll)  # [N, 2]
+
     stations_gj = load_police_geojson()
-    sta = [
-        {"station_name": f["properties"].get("name", "Police"),
-         "geometry": Point(f["geometry"]["coordinates"])}
-        for f in stations_gj["features"]
-    ]
-    gdf_sta = gpd.GeoDataFrame(sta, crs="EPSG:4326").to_crs("EPSG:27700")
-    nearest = gpd.sjoin_nearest(centroids, gdf_sta, distance_col="dist_m")
-    nearest = nearest.drop_duplicates(subset=["lsoa"])
-    nearest["dist_km"] = nearest["dist_m"] / 1000.0
-    return nearest[["lsoa", "dist_km", "station_name"]].reset_index(drop=True)
+    sta_records = []
+    sta_names: list[str] = []
+    for f in stations_gj["features"]:
+        lon, lat = f["geometry"]["coordinates"][:2]
+        sta_records.append((lat, lon))
+        sta_names.append(f["properties"].get("name", "Police"))
+    sta = np.array(sta_records)  # [M, 2]
+
+    # Vectorised haversine: N centroids x M stations.
+    r_km = 6371.0
+    lat1 = np.radians(cent[:, 0])[:, None]
+    lat2 = np.radians(sta[:, 0])[None, :]
+    dlat = lat2 - lat1
+    dlon = np.radians(sta[:, 1][None, :] - cent[:, 1][:, None])
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    dists = 2 * r_km * np.arcsin(np.sqrt(a))
+
+    nearest_idx = np.argmin(dists, axis=1)
+    nearest_km = dists[np.arange(len(codes)), nearest_idx]
+    nearest_names = [sta_names[i] for i in nearest_idx]
+    return pd.DataFrame({
+        "lsoa": codes,
+        "dist_km": nearest_km,
+        "station_name": nearest_names,
+    })
 
 
 # ----- allocation -----
