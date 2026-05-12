@@ -2,7 +2,7 @@
 CBL Group 16 demand dashboard.
 
 Reads the Phase 5 k=6 cluster output and renders an interactive Greater
-London map: choropleth by demand score, top-10 hotspot leaderboard,
+London map: choropleth by risk score, top-10 hotspot leaderboard,
 click-to-detail with the six model drivers, tier distribution chart,
 and a coverage-gaps table built from Met Police station locations.
 
@@ -250,7 +250,7 @@ if STYLE_CSS.exists():
 st.markdown(
     '<div class="poc-banner">'
     "<b>Proof of concept by CBL Group 16.</b> A planning aid, not a "
-    "deployment tool. Demand score per neighbourhood, built from 36 months "
+    "deployment tool. Risk score per neighbourhood, built from 36 months "
     "of crime records, outcomes, stop-and-search, TfL footfall, deprivation, "
     "and weather. All 4,994 London LSOAs (2021 boundaries) included."
     "</div>",
@@ -260,7 +260,7 @@ st.markdown(
 st.title("London policing demand dashboard")
 st.markdown(
     "<p class='muted'>"
-    "Where the demand sits across London. 4,994 neighbourhoods scored and "
+    "Where the risk sits across London. 4,994 neighbourhoods scored and "
     "grouped into 6 tiers, busiest to quietest."
     "</p>",
     unsafe_allow_html=True,
@@ -359,7 +359,7 @@ k2.metric("Hotspots", f"{n_hotspot:,}",
 k3.metric("Average score", f"{mean_risk:.1f}",
           delta=f"top: {top_row['risk_score_scaled']:.1f}" if top_row is not None else None,
           delta_color="off",
-          help="Demand score averaged across what's currently in view.")
+          help="Risk score averaged across what's currently in view.")
 k4.metric("Officers reallocated", f"{officers_reallocated:,}",
           help="Officers we'd move toward higher-demand neighbourhoods "
                "instead of spreading them evenly.")
@@ -387,7 +387,7 @@ with col_map:
         [TIER_COLOR[6], TIER_COLOR[5], TIER_COLOR[4],
          TIER_COLOR[3], TIER_COLOR[2], TIER_COLOR[1]],
         vmin=vmin, vmax=vmax,
-        caption="Demand score (low to high)",
+        caption="Risk score (low to high)",
     )
 
     m = folium.Map(
@@ -503,7 +503,7 @@ with col_detail:
             st.rerun()
 
         m1, m2 = st.columns(2)
-        m1.metric("Demand score", f"{row['risk_score_scaled']:.1f}")
+        m1.metric("Risk score", f"{row['risk_score_scaled']:.1f}")
         m2.metric("Tier", f"{row['tier']}. {row['tier_label']}")
         m3, m4 = st.columns(2)
         m3.metric("Proposed officers", f"{row['officers_proposed']:.1f}",
