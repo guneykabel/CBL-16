@@ -246,17 +246,6 @@ st.set_page_config(
 if STYLE_CSS.exists():
     st.markdown(f"<style>{STYLE_CSS.read_text()}</style>", unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="poc-banner">'
-    "<b>Proof of concept by CBL Group 16.</b> A planning aid, not a "
-    "deployment tool. Risk score per neighbourhood, built from 36 months "
-    "of crime records, outcomes, stop-and-search, TfL footfall, deprivation, "
-    "and weather. All 4,994 London LSOAs (2021 boundaries) grouped into "
-    "4 risk tiers."
-    "</div>",
-    unsafe_allow_html=True,
-)
-
 st.title("London policing demand dashboard")
 st.markdown(
     "<p class='muted'>"
